@@ -29,7 +29,7 @@ class HomePage extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              '电脑端窗口左上角会显示地址，例如 192.168.1.8:37021。',
+              '电脑端窗口右上角会显示地址，例如 192.168.1.8:37021。',
               style: TextStyle(color: Palette.textDim, fontSize: 13, height: 1.5),
             ),
             const SizedBox(height: 14),
@@ -80,6 +80,8 @@ class HomePage extends StatelessWidget {
       builder: (context, _) {
         final net = app.net;
         final connected = net.state == LinkState.connected;
+        final choosing = net.state == LinkState.choosing;
+
         return SafeArea(
           bottom: false,
           child: SingleChildScrollView(
@@ -89,19 +91,25 @@ class HomePage extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _Header(onOpenSettings: onOpenSettings),
-                const SizedBox(height: 18),
+                const SizedBox(height: 14),
                 Center(
                   child: RadarOrb(
-                    active: net.state != LinkState.connected,
+                    active: !connected,
                     connected: connected,
-                    size: 208,
+                    size: choosing ? 168 : 204,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 _StatusBlock(app: app),
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
                 if (connected)
-                  _HostCard(app: app, onRescan: () => net.startDiscovery())
+                  _HostCard(app: app, onSwitch: () => net.startDiscovery(manual: true))
+                else if (choosing)
+                  _ChooserCard(
+                    app: app,
+                    onPick: net.pick,
+                    onRescan: () => net.startDiscovery(),
+                  )
                 else
                   _FinderCard(
                     app: app,
@@ -112,10 +120,10 @@ class HomePage extends StatelessWidget {
                 GradientButton(
                   label: connected ? '开始拍摄' : '先拍，连上后自动补传',
                   icon: Icons.camera_alt_rounded,
-                  height: 58,
+                  height: 56,
                   onTap: onOpenCamera,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
                 Row(
                   children: [
                     Expanded(child: StatTile(label: '已同步', value: '${app.sentCount} 张')),
@@ -206,13 +214,24 @@ class _StatusBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     final net = app.net;
     final connected = net.state == LinkState.connected;
+    final choosing = net.state == LinkState.choosing;
     final scanning = net.state == LinkState.scanning;
 
     final title = connected
         ? (net.host?.name ?? '电脑')
-        : scanning
-            ? '正在寻找电脑…'
-            : '暂未连接';
+        : choosing
+            ? '发现 ${net.candidates.length} 台电脑'
+            : scanning
+                ? '正在寻找电脑…'
+                : '暂未连接';
+
+    final dotColor = connected
+        ? Palette.ok
+        : choosing
+            ? Palette.accent2
+            : scanning
+                ? Palette.warn
+                : Palette.err;
 
     return Column(
       children: [
@@ -224,12 +243,9 @@ class _StatusBlock extends StatelessWidget {
               height: 7,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: connected ? Palette.ok : (scanning ? Palette.warn : Palette.err),
+                color: dotColor,
                 boxShadow: [
-                  BoxShadow(
-                    color: (connected ? Palette.ok : Palette.warn).withValues(alpha: 0.6),
-                    blurRadius: 8,
-                  ),
+                  BoxShadow(color: dotColor.withValues(alpha: 0.6), blurRadius: 8),
                 ],
               ),
             ),
@@ -241,14 +257,14 @@ class _StatusBlock extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Palette.text,
-                  fontSize: 22,
+                  fontSize: 21,
                   fontWeight: FontWeight.w700,
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 7),
         Text(
           net.hint,
           textAlign: TextAlign.center,
@@ -281,72 +297,226 @@ class _StatusBlock extends StatelessWidget {
 }
 
 class _HostCard extends StatelessWidget {
-  const _HostCard({required this.app, required this.onRescan});
+  const _HostCard({required this.app, required this.onSwitch});
 
   final AppState app;
-  final VoidCallback onRescan;
+  final VoidCallback onSwitch;
 
   @override
   Widget build(BuildContext context) {
     final host = app.net.host;
     return GlassCard(
-      padding: const EdgeInsets.fromLTRB(18, 16, 14, 14),
+      padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              const Icon(Icons.folder_rounded, size: 17, color: Palette.accent),
-              const SizedBox(width: 8),
-              const Text(
-                '照片保存位置（电脑）',
-                style: TextStyle(color: Palette.textDim, fontSize: 12.5, fontWeight: FontWeight.w600),
+              HostAvatar(
+                name: host?.name ?? '电脑',
+                hue: host?.hue ?? 262,
+                size: 42,
+                online: true,
               ),
-              const Spacer(),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      host?.name ?? '电脑',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Palette.text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      host?.label ?? '',
+                      style: const TextStyle(color: Palette.textDim, fontSize: 11.5),
+                    ),
+                  ],
+                ),
+              ),
               TextButton(
-                onPressed: onRescan,
+                onPressed: onSwitch,
                 style: TextButton.styleFrom(
                   minimumSize: Size.zero,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: const Text('重新搜索', style: TextStyle(color: Palette.accent, fontSize: 12.5)),
+                child: const Text('切换', style: TextStyle(color: Palette.accent, fontSize: 12.5)),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            (host?.dir.isNotEmpty ?? false) ? host!.dir : '电脑端默认目录',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Palette.text,
-              fontSize: 13.5,
-              height: 1.45,
-              fontFeatures: [FontFeature.tabularFigures()],
-            ),
-          ),
           const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Palette.accent.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.check_circle_rounded, size: 16, color: Palette.ok),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '拍完自动同步，电脑端立即出现',
-                    style: TextStyle(color: Palette.text.withValues(alpha: 0.85), fontSize: 12.5),
+          Container(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Icon(Icons.folder_rounded, size: 15, color: Palette.accent),
+              const SizedBox(width: 7),
+              const Text(
+                '保存到',
+                style: TextStyle(color: Palette.textDim, fontSize: 12),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  (host?.dir.isNotEmpty ?? false) ? host!.dir : '电脑端默认目录',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Palette.text,
+                    fontSize: 12,
+                    fontFeatures: [FontFeature.tabularFigures()],
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              const Icon(Icons.check_circle_rounded, size: 14, color: Palette.ok),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '拍完自动同步，电脑端立即出现',
+                  style: TextStyle(color: Palette.text.withValues(alpha: 0.8), fontSize: 11.5),
+                ),
+              ),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ChooserCard extends StatelessWidget {
+  const _ChooserCard({
+    required this.app,
+    required this.onPick,
+    required this.onRescan,
+  });
+
+  final AppState app;
+  final Future<void> Function(HostInfo host) onPick;
+  final VoidCallback onRescan;
+
+  @override
+  Widget build(BuildContext context) {
+    final hosts = app.net.candidates;
+    return GlassCard(
+      padding: const EdgeInsets.fromLTRB(14, 16, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.devices_rounded, size: 16, color: Palette.accent2),
+              const SizedBox(width: 8),
+              const Text(
+                '选一台电脑',
+                style: TextStyle(color: Palette.text, fontSize: 14, fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              Pill(label: '${hosts.length} 台在线', color: Palette.ok, dense: true),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            '同一个 WiFi 里有好几台电脑，点一下就连上；下次会自动连这一台。',
+            style: TextStyle(color: Palette.textDim, fontSize: 11.5, height: 1.5),
+          ),
+          const SizedBox(height: 8),
+          for (var i = 0; i < hosts.length; i++) ...[
+            if (i > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Container(height: 1, color: Colors.white.withValues(alpha: 0.05)),
+              ),
+            _HostRow(
+              host: hosts[i],
+              preferred: app.settings.hostId == hosts[i].key,
+              onTap: () => onPick(hosts[i]),
+            ),
+          ],
+          const SizedBox(height: 8),
+          GhostButton(
+            label: '重新搜索',
+            icon: Icons.refresh_rounded,
+            height: 42,
+            onTap: onRescan,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HostRow extends StatelessWidget {
+  const _HostRow({required this.host, required this.preferred, required this.onTap});
+
+  final HostInfo host;
+  final bool preferred;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+          child: Row(
+            children: [
+              HostAvatar(name: host.name, hue: host.hue, size: 40),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            host.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Palette.text,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (preferred) ...[
+                          const SizedBox(width: 6),
+                          Pill(label: '上次', color: Palette.ok, dense: true),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${host.label} · 已存 ${host.photos} 张',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Palette.textDim, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, size: 20, color: Palette.textDim),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -379,12 +549,12 @@ class _FinderCard extends StatelessWidget {
                 style: TextStyle(color: Palette.text, fontSize: 14, fontWeight: FontWeight.w700),
               ),
               const Spacer(),
-              Pill(label: 'UDP ${37020}', color: Palette.textDim, dense: true),
+              Pill(label: 'UDP 37020', color: Palette.textDim, dense: true),
             ],
           ),
           const SizedBox(height: 10),
           const Text(
-            '手机和电脑连同一个 WiFi，电脑端运行 timescam_host.py，通常 1 秒内就能连上。',
+            '手机和电脑连同一个 WiFi：只有一台电脑时立刻连上；有多台会列出来让你点。',
             style: TextStyle(color: Palette.textDim, fontSize: 12.5, height: 1.6),
           ),
           const SizedBox(height: 14),
@@ -421,8 +591,8 @@ class _Steps extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const items = <(int, String, String)>[
-      (1, '电脑端运行上机位', '双击 host 目录下的 start_host.bat'),
-      (2, '手机连同一个 WiFi', '电脑显示的地址就是本机 IP'),
+      (1, '电脑端运行上位机', '双击 host/dist/TimesCamHost.exe'),
+      (2, '手机连同一个 WiFi', '一台电脑时自动连，多台点头像选'),
       (3, '拍照即同步', '拍一张，电脑文件夹里马上就有'),
     ];
     return Column(

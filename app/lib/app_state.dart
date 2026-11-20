@@ -15,6 +15,8 @@ class Settings {
   String manualHost = '';
   bool grid = false;
   bool flash = false;
+  String hostId = '';
+  String hostName = '';
 
   static const List<String> resolutionLabels = ['最高', '4K', '1080P', '720P'];
 }
@@ -22,6 +24,7 @@ class Settings {
 class AppState extends ChangeNotifier {
   AppState(this.net) {
     net.addListener(_onNet);
+    net.onHostPicked = _rememberHost;
   }
 
   final NetClient net;
@@ -65,8 +68,27 @@ class AppState extends ChangeNotifier {
       ..deviceName = p.getString('deviceName') ?? '我的手机'
       ..manualHost = p.getString('manualHost') ?? ''
       ..grid = p.getBool('grid') ?? false
-      ..flash = p.getBool('flash') ?? false;
+      ..flash = p.getBool('flash') ?? false
+      ..hostId = p.getString('hostId') ?? ''
+      ..hostName = p.getString('hostName') ?? '';
     net.deviceName = settings.deviceName;
+    net.preferredId = settings.hostId.isEmpty ? null : settings.hostId;
+    notifyListeners();
+  }
+
+  void _rememberHost(HostInfo host) {
+    final id = host.id.isEmpty ? host.key : host.id;
+    if (settings.hostId == id && settings.hostName == host.name) return;
+    settings.hostId = id;
+    settings.hostName = host.name;
+    unawaited(saveSettings());
+  }
+
+  void forgetHost() {
+    settings.hostId = '';
+    settings.hostName = '';
+    net.forgetHost();
+    unawaited(saveSettings());
     notifyListeners();
   }
 
@@ -79,7 +101,10 @@ class AppState extends ChangeNotifier {
     await p.setString('manualHost', settings.manualHost);
     await p.setBool('grid', settings.grid);
     await p.setBool('flash', settings.flash);
+    await p.setString('hostId', settings.hostId);
+    await p.setString('hostName', settings.hostName);
     net.deviceName = settings.deviceName;
+    net.preferredId = settings.hostId.isEmpty ? null : settings.hostId;
     notifyListeners();
   }
 

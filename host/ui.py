@@ -18,9 +18,10 @@ from config import (
     PROTO_VER,
     default_dir,
     human_size,
+    hue_from_id,
     local_ip,
-    save_config,
     short_path,
+    update_config,
 )
 from discovery import discovery_loop
 from draw import (
@@ -29,6 +30,8 @@ from draw import (
     PhotoGrid,
     blend,
     draw_gradient_round,
+    hue_color,
+    initial_of,
     mix_bg,
 )
 from server import start_http
@@ -86,6 +89,7 @@ class HostApp:
 
         self._last_status = None
         self._last_counts = None
+        self._device_sig = None
 
         self._build()
         self._start_servers()
@@ -267,9 +271,12 @@ class HostApp:
                                  wraplength=268)
         self.link_sub.pack(anchor="w")
 
-        tk.Label(inner, text="手机端打开 TimesCam，连同一个 WiFi 会自动连上",
+        self.device_box = tk.Frame(inner, bg=CARD)
+        self.device_box.pack(fill="x")
+
+        tk.Label(inner, text="手机端打开 TimesCam，同一个 WiFi 自动连",
                  bg=CARD, fg=MUTED, font=(self.font, 8), anchor="w",
-                 justify="left", wraplength=268).pack(anchor="w", pady=(8, 0))
+                 justify="left", wraplength=268).pack(anchor="w", pady=(6, 0))
 
     def _build_stats_card(self, parent):
         tk = self.tk
@@ -315,7 +322,7 @@ class HostApp:
         if chosen:
             self.state.set_dir(chosen)
             self._refresh_dir_label()
-            save_config({"dir": chosen, "port": self.port})
+            update_config(dir=chosen)
             self.set_footer(f"保存位置已切换：{chosen}")
 
     def open_folder(self):
@@ -351,6 +358,9 @@ class HostApp:
                     self._refresh_dir_label()
                 elif kind == "log":
                     self.set_footer(payload.get("text", ""))
+                elif kind == "focus":
+                    ip = payload.get("ip", "")
+                    self.set_footer("只显示这台手机的照片（点「看全部」取消）" if ip else "显示全部手机的照片")
         except queue.Empty:
             pass
 
@@ -366,13 +376,25 @@ class HostApp:
 
     def _refresh_status(self):
         snap = self.state.snapshot()
+        devices = snap["devices"]
+        focus = snap["focus"]
+
+        # 选中的手机掉线了就自动回到「全部」
+        if focus and focus not in {d["ip"] for d in devices}:
+            self.state.set_focus("")
+            focus = ""
+
         online = (time.time() - snap["last_seen"]) < 12 and snap["last_seen"] > 0
 
         if online:
-            device = snap["device"] or "手机"
-            text = f"● 已连接 · {device}"
+            alive = len(devices)
+            name = devices[0]["name"] if len(devices) == 1 else ""
+            if name:
+                text = f"● 已连接 · {name}"
+            else:
+                text = f"● 已连接 · {alive} 台手机"
             color = OK
-            self.link_text.configure(text=f"{device} 已连接")
+            self.link_text.configure(text=text.replace("● ", ""))
         else:
             text = "● 等待手机连接"
             color = WARN
@@ -384,10 +406,12 @@ class HostApp:
             self.link_dot.delete("all")
             self.link_dot.create_oval(0, 0, 8, 8, fill=color, outline="")
 
-        counts = (snap["count"], snap["total"])
+        counts = (snap["count"], snap["total"], focus, len(devices))
         if counts != self._last_counts:
             self._last_counts = counts
-            self.count_badge.configure(text=f'{snap["count"]} 张')
+            shown = [i for i in snap["items"] if not focus or i.get("ip") == focus]
+            badge = f"{len(shown)} / {snap['count']} 张" if focus else f'{snap["count"]} 张'
+            self.count_badge.configure(text=badge)
             self.stat_values["count"].configure(text=f'{snap["count"]}')
             self.stat_values["total"].configure(text=human_size(snap["total"]))
             self.stat_values["ms"].configure(
@@ -395,9 +419,70 @@ class HostApp:
             self.stat_values["speed"].configure(
                 text=f'{snap["last_speed"]:.1f} MB/s' if snap["last_speed"] else "—")
             if snap["client_ip"]:
-                self.link_sub.configure(text=f'手机 {snap["client_ip"]} · 直传端口 {self.port}')
+                self.link_sub.configure(
+                    text=f'手机 {snap["client_ip"]} · 直传端口 {self.port}')
 
-        self.grid_view.refresh(snap["items"])
+        self._refresh_devices(devices, focus)
+
+        items = snap["items"]
+        if focus:
+            items = [i for i in items if i.get("ip") == focus]
+        self.grid_view.refresh(items)
+
+    def _refresh_devices(self, devices, focus):
+        tk = self.tk
+        sig = (tuple((d["ip"], d["name"], d["count"]) for d in devices), focus)
+        if sig == self._device_sig:
+            return
+        self._device_sig = sig
+
+        for child in self.device_box.winfo_children():
+            child.destroy()
+        if not devices:
+            return
+
+        if len(devices) > 1:
+            head = tk.Frame(self.device_box, bg=CARD)
+            head.pack(fill="x", pady=(9, 4))
+            tk.Label(head, text=f"在线手机 {len(devices)} 台",
+                     bg=CARD, fg=SUB, font=(self.font, 8, "bold")).pack(side="left")
+            if focus:
+                btn = tk.Label(head, text="看全部", bg=CARD, fg=ACCENT,
+                               font=(self.font, 8), cursor="hand2")
+                btn.pack(side="right")
+                btn.bind("<Button-1>", lambda e: self.state.set_focus(""))
+
+        for dev in devices[:5]:
+            selected = dev["ip"] == focus
+            bg = mix_bg(ACCENT, 0.18, CARD2) if selected else CARD2
+            row = tk.Frame(self.device_box, bg=bg,
+                           highlightbackground=blend(STROKE, ACCENT, 0.6) if selected else STROKE,
+                           highlightthickness=1, cursor="hand2")
+            row.pack(fill="x", pady=(0, 4))
+
+            avatar = tk.Canvas(row, width=26, height=26, bg=bg, highlightthickness=0)
+            avatar.pack(side="left", padx=(7, 7), pady=6)
+            avatar.create_oval(1, 1, 25, 25,
+                               fill=hue_color(hue_from_id(dev["name"] + dev["ip"])),
+                               outline="")
+            avatar.create_text(13, 13, text=initial_of(dev["name"]), fill="#FFFFFF",
+                               font=(self.font, 9, "bold"))
+
+            col = tk.Frame(row, bg=bg)
+            col.pack(side="left", fill="x", expand=True, pady=5)
+            tk.Label(col, text=dev["name"], bg=bg, fg=TEXT, font=(self.font, 9, "bold"),
+                     anchor="w").pack(fill="x")
+            tk.Label(col, text=f'{dev["count"]} 张 · {dev["ip"]}', bg=bg, fg=MUTED,
+                     font=(self.font, 8), anchor="w").pack(fill="x")
+
+            if selected:
+                tk.Label(row, text="只看这台", bg=bg, fg=ACCENT,
+                         font=(self.font, 8)).pack(side="right", padx=8)
+
+            ip = dev["ip"]
+            targets = [row, avatar, col, *col.winfo_children()]
+            for widget in targets:
+                widget.bind("<Button-1>", lambda e, v=ip: self.state.set_focus(v))
 
     def run(self):
         self.root.mainloop()

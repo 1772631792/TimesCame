@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import json
 import socket
+import uuid
 from pathlib import Path
 
 APP_NAME = "TimesCam Host"
-APP_VER = "1.0.0"
+APP_VER = "1.1.0"
 
 DISCOVERY_PORT = 37020
 HTTP_PORT = 37021
@@ -27,7 +28,8 @@ def default_dir() -> Path:
 
 
 def load_config() -> dict:
-    cfg = {"dir": str(default_dir()), "port": HTTP_PORT}
+    """dir / port / id；id 是这台电脑的身份，手机靠它认出「上次那台」。"""
+    cfg = {"dir": str(default_dir()), "port": HTTP_PORT, "id": uuid.uuid4().hex[:8]}
     try:
         if CONFIG_PATH.exists():
             data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
@@ -40,9 +42,24 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     try:
-        CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        current = load_config()
+        current.update(cfg)
+        CONFIG_PATH.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+
+def update_config(**changes) -> dict:
+    cfg = load_config()
+    cfg.update(changes)
+    save_config(cfg)
+    return cfg
+
+
+def hue_from_id(value: str) -> int:
+    """同一个 id 永远得到同一个色相，头像颜色就稳定了。"""
+    total = sum(ord(ch) * (i + 7) for i, ch in enumerate(value or "timescam"))
+    return total % 360
 
 
 def local_ip() -> str:

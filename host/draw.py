@@ -43,6 +43,22 @@ def rgb_hex(rgb: tuple[int, int, int]) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def hue_color(hue: int, sat: float = 0.62, light: float = 0.56) -> str:
+    """手机头像用的稳定色：同一个色相永远同一个颜色。"""
+    import colorsys
+
+    r, g, b = colorsys.hls_to_rgb((hue % 360) / 360.0, light, sat)
+    return rgb_hex((r * 255, g * 255, b * 255))
+
+
+def initial_of(name: str) -> str:
+    text = (name or "").strip()
+    if not text:
+        return "?"
+    first = text[0]
+    return first.upper() if first.isascii() and first.isalpha() else first
+
+
 def blend(c1: str, c2: str, t: float) -> str:
     a, b = hex_rgb(c1), hex_rgb(c2)
     return rgb_hex((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t))

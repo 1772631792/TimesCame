@@ -222,6 +222,100 @@ class Pill extends StatelessWidget {
   }
 }
 
+/// 每台电脑一个稳定的渐变色头像：色相来自电脑自己的 id。
+LinearGradient avatarGradient(int hue) {
+  final h = hue % 360;
+  final c1 = HSLColor.fromAHSL(1, h.toDouble(), 0.68, 0.62).toColor();
+  final c2 = HSLColor.fromAHSL(1, (h + 48) % 360, 0.7, 0.48).toColor();
+  return LinearGradient(
+    colors: [c1, c2],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+}
+
+class HostAvatar extends StatelessWidget {
+  const HostAvatar({
+    super.key,
+    required this.name,
+    required this.hue,
+    this.size = 46,
+    this.icon = Icons.desktop_windows_rounded,
+    this.online = false,
+  });
+
+  final String name;
+  final int hue;
+  final double size;
+  final IconData? icon;
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: avatarGradient(hue),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
+              boxShadow: [
+                BoxShadow(
+                  color: HSLColor.fromAHSL(1, (hue % 360).toDouble(), 0.7, 0.55)
+                      .toColor()
+                      .withValues(alpha: 0.35),
+                  blurRadius: 14,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            alignment: Alignment.center,
+            child: icon != null
+                ? Icon(icon, size: size * 0.46, color: Colors.white)
+                : Text(
+                    initialOf(name),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: size * 0.4,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+          ),
+          if (online)
+            Positioned(
+              right: -1,
+              bottom: -1,
+              child: Container(
+                width: size * 0.28,
+                height: size * 0.28,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Palette.ok,
+                  border: Border.all(color: Palette.bg, width: 2),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+String initialOf(String name) {
+  final text = name.trim();
+  if (text.isEmpty) return '?';
+  final runes = text.runes.toList();
+  final first = String.fromCharCode(runes.first);
+  if (RegExp(r'[a-zA-Z]').hasMatch(first)) return first.toUpperCase();
+  return first;
+}
+
 class GlassIconButton extends StatelessWidget {
   const GlassIconButton({
     super.key,

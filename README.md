@@ -3,6 +3,9 @@
 连同一个 WiFi，手机拍完，电脑选中的文件夹里立刻出现这张照片。
 不用数据线、不用微信、不用装网盘——一张 4K 照片通常 **0.3 ~ 0.8 秒** 落地。
 
+WiFi 里只有一台电脑时 **0.5 秒自动连上**；有好几台时首页会列出**带渐变色头像的电脑列表**，
+点一下就选谁，下次自动连同一台。
+
 ```
 手机 App（Flutter）                        上位机（Python）
 ┌──────────────────┐   UDP 37020 广播   ┌──────────────────────┐
@@ -35,6 +38,8 @@ TimesCame/
 │   │       └── settings_sheet.dart    设置（画质 / 自动同步 / 设备名）
 │   ├── android/.../res/       启动图标（由脚本生成，别手改）
 │   └── build.py               一键打 APK（自动画图标 + 配代理）
+├── docs/release-notes/        各版本发布说明（如 v1.1.0.md）
+├── release/                   发布物（exe / apk / 发布说明，已 gitignore）
 ├── host/                      Python 上位机
 │   ├── main.py                入口：GUI / --no-gui / --selftest
 │   ├── ui.py                  Tkinter 界面（深色、渐变按钮、照片墙）
@@ -48,7 +53,8 @@ TimesCame/
 │   ├── icon.ico / icon.png    脚本生成的二次元图标
 │   └── start_host.bat         Windows 双击启动（优先跑 exe）
 └── tools/
-    └── make_icon.py           图标生成器（两只脚本共用一张母图）
+    ├── make_icon.py           图标生成器（两只脚本共用一张母图）
+    └── publish_release.py     把 release/ 里的产物发到 GitHub Release
 ```
 
 ## 快速开始
@@ -72,17 +78,20 @@ python main.py              # 也可以双击 start_host.bat
 **3. 用起来**
 
 1. 手机和电脑连**同一个 WiFi**（同一个路由器，别一个 5G 一个访客网络）。
-2. 打开 App，首页雷达自动找到电脑，显示「已连接 · 电脑名」与延迟。
+2. 打开 App，首页雷达自动找电脑：
+   - WiFi 里只有一台电脑 → 直接显示「已连接 · 电脑名」，不用点任何东西；
+   - 有好几台 → 列出每台的**头像 + 名字 + 已存张数**，点一下就连；上次连过的那台会标「上次」，出现时直接自动连。
 3. 点「开始拍摄」，相机全屏预览，按快门 → 顶部提示「已同步 · 320 ms」。
 4. 电脑窗口里立刻多出一张缩略图，文件已经在左侧显示的文件夹里。
 
 > 找不到电脑时点「手动连接」，把电脑上那个地址填进去即可（广播被路由器挡掉时用这招）。
+> 已连接时想换一台电脑，点首页的「切换」。
 
 ## 手机端能做什么
 
 | 页面 | 能力 |
 | --- | --- |
-| 连接 | 同一 WiFi 内 UDP 广播自动发现、1 秒级重连、延迟实时显示、手动填 IP、断线自动重新搜索；显示电脑保存目录与同步统计 |
+| 连接 | 同一 WiFi 内 UDP 广播自动发现：只有一台电脑 0.5 秒自动连；多台则列出**渐变色头像 + 名字 + 地址 + 已存张数**任选，记住上次那台（一出现就直连）；支持切换 / 手动填 IP / 断线自动重搜 / 延迟显示 |
 | 相机 | 全屏预览、点按对焦、九宫格、自动闪光、前后摄切换、快门动画；拍完立即上传，顶部实时显示进度 / 耗时；未连接时先排队，连上自动补传 |
 | 相册 | 本次拍摄的缩略图网格，每张带状态（待传 / 上传中 / 已同步 / 失败）、耗时与大小；点开可放大查看、失败一键重传 |
 | 设置 | 画质（最高 / 4K / 1080P / 720P）、拍完自动上传、保留手机副本、设备名（显示在电脑上）、手动地址 |
@@ -98,7 +107,8 @@ python main.py              # 也可以双击 start_host.bat
 - 深色界面：左侧「保存位置 / 连接 / 本次统计」，右侧缩略图墙（新照片排最前、带高亮边框）。
 - 保存位置随时可换，选完下次启动还记得（存在 `~/.timescam_host.json`）。
 - 实时统计：已接收张数、总容量、最近耗时、最高速度。
-- 手机连上后右上角变绿：「已连接 · 你的手机名」，并显示手机 IP；点地址即可复制到 App 里手动连接。
+- **在线手机列表**：每台手机一个彩色头像 + 名字 + 已收张数；有多台时点某一行 → 照片墙只显示这台的照片（计数变成 `2 / 6 张`），点「看全部」恢复；手机掉线自动取消筛选。
+- 手机连上后右上角变绿：「已连接 · 你的手机名」（多台时显示「已连接 · 3 台手机」），并显示当前手机 IP；点地址即可复制到 App 里手动连接。
 - 点缩略图用系统看图工具打开原图；「打开文件夹」直接跳资源管理器。
 - 没有前台窗口也能收：`python main.py --no-gui` 只跑服务、终端打印日志。
 
@@ -111,7 +121,7 @@ cd host
 python build.py
 ```
 
-- 产物：`host/dist/TimesCamHost.exe`（约 28 MB，免安装、免 Python）。
+- 产物：`host/dist/TimesCamHost.exe`（v1.1.0，约 28 MB，免安装、免 Python）。
 - 脚本会先跑 `tools/make_icon.py` 现画 **二次元大眼睛** 图标 `icon.ico`，再交给 PyInstaller。
 - 没装 PyInstaller / Pillow 会自动 `pip install`，默认走 `127.0.0.1:7897` 代理：
 
@@ -128,7 +138,7 @@ cd app
 python build.py
 ```
 
-- 产物：`app/dist/TimesCam-v1.0.0-20261120.apk`（约 51 MB），脚本结束会自动打开 dist 目录。
+- 产物：`app/dist/TimesCam-v1.1.0-20261120.apk`（约 51 MB），脚本结束会自动打开 dist 目录。
 - 三件事自动完成：① 生成 mdpi~xxxhdpi 五档启动图标 ② 把代理写进 `android/gradle.properties` ③ `flutter build apk --release`。
 - 首次构建要下 Gradle 依赖 + 编译原生库，**十几分钟是正常的**；同一份工程第二次打包通常 1~2 分钟。
 - 参数：
@@ -142,6 +152,40 @@ python build.py --split-abi       # 按 ABI 分包，单包更小
 
 > 代理默认 `127.0.0.1:7897`（Clash 常用端口）。脚本会先探测端口：没开就自动改成直连，
 > 不会因为代理挂了把构建卡死。换端口就 `python build.py --proxy 127.0.0.1:端口`。
+
+## 发布 Release
+
+`release/TimesCam-v1.1.0/` 里装的就是这一版的全部发布物：
+
+```text
+TimesCamHost-v1.1.0.exe      电脑端单文件（28 MB）
+TimesCam-v1.1.0-20261120.apk 手机端安装包（51 MB）
+RELEASE.md                   发布说明（= docs/release-notes/v1.1.0.md）
+SHA256SUMS.txt               校验和
+```
+
+发布到 GitHub（本机没装 `gh` 也能用，脚本只用标准库）：
+
+```bash
+# 先把 tag 推上去
+git tag v1.1.0
+git push --tags
+
+# 再用 token 建 Release 并上传两个文件
+set GITHUB_TOKEN=ghp_xxx          # 需要 repo / Contents: Read and write
+python tools/publish_release.py --dry-run     # 先看要发什么
+python tools/publish_release.py
+```
+
+装了 `gh` 的话等价于：
+
+```bash
+gh release create v1.1.0 release/TimesCam-v1.1.0/*.exe release/TimesCam-v1.1.0/*.apk \
+   --title "TimesCam v1.1.0" --notes-file docs/release-notes/v1.1.0.md
+```
+
+下次发版流程：改版本号（`app/pubspec.yaml`、`host/config.py`）→ 写 `docs/release-notes/vX.Y.Z.md`
+→ `python host/build.py` 和 `python app/build.py` → 复制进 `release/TimesCam-vX.Y.Z/` → 打 tag → 跑发布脚本。
 
 ## 图标 / 二次元
 

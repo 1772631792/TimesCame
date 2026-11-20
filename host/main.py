@@ -132,11 +132,12 @@ def main() -> int:
     cfg = load_config()
     port = args.port or int(cfg.get("port") or HTTP_PORT)
     save_dir = Path(args.dir or cfg.get("dir") or default_dir())
+    host_id = str(cfg.get("id") or "timescam")
 
     if args.selftest and not args.dir:
         save_dir = Path(tempfile.mkdtemp(prefix="timescam_selftest_"))
 
-    state = HostState(save_dir)
+    state = HostState(save_dir, host_id=host_id)
     state.port = port
 
     if args.selftest:

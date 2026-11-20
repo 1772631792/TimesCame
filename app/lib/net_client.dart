@@ -10,7 +10,10 @@ const int kDefaultHostPort = 37021;
 const String kHostTag = 'TIMESCAM/HOST';
 const String kDiscoverPayload = 'TIMESCAM/DISCOVER v1';
 
-enum LinkState { idle, scanning, connected, offline }
+/// 只给一台电脑留够汇总时间：WiFi 里只有一台时，半秒内就连上。
+const Duration kSettleWindow = Duration(milliseconds: 500);
+
+enum LinkState { idle, scanning, choosing, connected, offline }
 
 class HostInfo {
   const HostInfo({
@@ -18,14 +21,23 @@ class HostInfo {
     required this.ip,
     required this.port,
     this.dir = '',
+    this.id = '',
+    this.hue = 262,
+    this.photos = 0,
   });
 
   final String name;
   final String ip;
   final int port;
   final String dir;
+  final String id;
+  final int hue;
+  final int photos;
 
   String get label => '$ip:$port';
+
+  /// 有 id 用 id（换 IP 也认得），老版本没 id 就退回地址。
+  String get key => id.isEmpty ? label : id;
 
   Uri uri(String path) => Uri.parse('http://$ip:$port$path');
 }
@@ -49,6 +61,11 @@ class UploadResult {
 }
 
 /// 局域网发现 + 上传：UDP 广播找电脑，HTTP 直传照片。
+///
+/// 策略：
+/// - WiFi 里只有一台电脑 → 500ms 内自动连上
+/// - 有多台 → 进入 choosing，界面出头像列表让人点
+/// - 上次连过的那台出现 → 立刻连，不再问
 class NetClient extends ChangeNotifier {
   LinkState _state = LinkState.idle;
   HostInfo? _host;
@@ -56,11 +73,21 @@ class NetClient extends ChangeNotifier {
   int _latency = 0;
 
   String deviceName = '我的手机';
+  String? preferredId;
+  void Function(HostInfo host)? onHostPicked;
 
   LinkState get state => _state;
   HostInfo? get host => _host;
   String get hint => _hint;
   int get latency => _latency;
+
+  final Map<String, HostInfo> _found = {};
+
+  List<HostInfo> get candidates {
+    final list = _found.values.toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return list;
+  }
 
   RawDatagramSocket? _udp;
   StreamSubscription<RawSocketEvent>? _udpSub;
@@ -73,8 +100,11 @@ class NetClient extends ChangeNotifier {
 
   bool _disposed = false;
   bool _adopting = false;
+  bool _settled = false;
+  bool _manual = false;
   int _fails = 0;
   int _probes = 0;
+  DateTime? _startedAt;
 
   @override
   void dispose() {
@@ -97,22 +127,30 @@ class NetClient extends ChangeNotifier {
     _emit();
   }
 
-  Future<void> startDiscovery() async {
+  Future<void> startDiscovery({bool manual = false}) async {
     _pingTimer?.cancel();
     _probeTimer?.cancel();
+    _found.clear();
+    _host = null;
     _probes = 0;
-    _setState(LinkState.scanning, '正在同一 WiFi 内寻找电脑…');
+    _fails = 0;
+    _settled = false;
+    _manual = manual;
+    _startedAt = DateTime.now();
+
+    _setState(LinkState.scanning, manual ? '正在搜索附近的电脑…' : '正在同一 WiFi 内寻找电脑…');
     try {
       await _openUdp();
     } catch (_) {
       _setState(LinkState.offline, '无法开启局域网广播，请检查 WiFi 是否可用');
       return;
     }
+
     _probe();
-    _probeTimer = Timer.periodic(
-      const Duration(milliseconds: 900),
-      (_) => _probe(),
-    );
+    _probeTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
+      _probe();
+      _maybeSettle();
+    });
   }
 
   Future<void> stopDiscovery() async {
@@ -145,9 +183,11 @@ class NetClient extends ChangeNotifier {
     } catch (_) {
       // 广播被系统拒绝时不影响手动连接
     }
-    if (_probes > 60) {
+    if (_probes > 90) {
       _probeTimer?.cancel();
-      _setState(LinkState.offline, '没找到电脑：确认两台设备连同一个 WiFi，并允许防火墙');
+      if (_state != LinkState.connected) {
+        _setState(LinkState.offline, '没找到电脑：确认两台设备连同一个 WiFi，并允许防火墙');
+      }
     }
   }
 
@@ -162,20 +202,79 @@ class NetClient extends ChangeNotifier {
       return;
     }
 
-    final port = (map['port'] as num?)?.toInt() ?? kDefaultHostPort;
     final info = HostInfo(
       name: (map['name'] ?? '电脑').toString(),
       ip: dg.address.address,
-      port: port,
+      port: (map['port'] as num?)?.toInt() ?? kDefaultHostPort,
       dir: (map['dir'] ?? '').toString(),
+      id: (map['id'] ?? '').toString(),
+      hue: (map['hue'] as num?)?.toInt() ?? 262,
+      photos: (map['count'] as num?)?.toInt() ?? 0,
     );
 
-    if (_state == LinkState.connected && _host?.label == info.label) return;
-    unawaited(_adopt(info));
+    final existing = _found[info.key];
+    _found[info.key] = info;
+
+    if (_state == LinkState.connected) {
+      if (_host?.key == info.key) {
+        _host = info; // 目录/张数可能变了
+        _emit();
+      }
+      return;
+    }
+
+    if (existing != null && existing.label == info.label && _state == LinkState.choosing) {
+      _emit();
+      return;
+    }
+
+    // 上次那台：出现就立刻连，秒连的关键
+    if (preferredId != null && preferredId == info.key && !_adopting) {
+      unawaited(_adopt(info));
+      return;
+    }
+
+    if (_state == LinkState.choosing) {
+      _emit();
+      return;
+    }
+
+    _maybeSettle();
+  }
+
+  void _maybeSettle() {
+    if (_settled || _adopting || _state == LinkState.connected) return;
+    final started = _startedAt;
+    if (started == null) return;
+    if (DateTime.now().difference(started) < kSettleWindow) return;
+    if (_found.isEmpty) return;
+
+    _settled = true;
+    final pref = preferredId;
+    if (pref != null && _found.containsKey(pref)) {
+      unawaited(_adopt(_found[pref]!));
+      return;
+    }
+
+    if (_found.length == 1 && !_manual) {
+      unawaited(_adopt(_found.values.first));
+      return;
+    }
+
+    _setState(
+      LinkState.choosing,
+      _found.length == 1 ? '找到 1 台电脑，点一下连上' : '发现 ${_found.length} 台电脑，选一台连上',
+    );
+  }
+
+  Future<void> pick(HostInfo info) async {
+    _settled = true;
+    _probeTimer?.cancel();
+    await _adopt(info);
   }
 
   Future<void> _adopt(HostInfo info) async {
-    if (_adopting || _state == LinkState.connected) return;
+    if (_adopting) return;
     _adopting = true;
     final sw = Stopwatch()..start();
     try {
@@ -190,8 +289,13 @@ class NetClient extends ChangeNotifier {
       _probeTimer = null;
       _startPing();
       _setState(LinkState.connected, '已连接');
+      onHostPicked?.call(info);
     } catch (_) {
-      _setState(LinkState.scanning, '发现了电脑，但 HTTP 连不上（放行防火墙后再试）');
+      if (_found.length > 1) {
+        _setState(LinkState.choosing, '连不上 ${info.name}（${info.label}），换一台试试');
+      } else {
+        _setState(LinkState.scanning, '发现了电脑，但 HTTP 连不上（放行防火墙后再试）');
+      }
     } finally {
       _adopting = false;
     }
@@ -220,21 +324,33 @@ class NetClient extends ChangeNotifier {
     try {
       final probe = HostInfo(name: '电脑', ip: ip, port: port);
       final res = await _getJson(probe.uri('/info')).timeout(const Duration(seconds: 4));
-      _host = HostInfo(
+      final info = HostInfo(
         name: (res['name'] ?? '电脑').toString(),
         ip: ip,
         port: port,
         dir: (res['dir'] ?? '').toString(),
+        id: (res['id'] ?? '').toString(),
+        hue: (res['hue'] as num?)?.toInt() ?? 262,
+        photos: (res['count'] as num?)?.toInt() ?? 0,
       );
+      _host = info;
+      _found[info.key] = info;
+      _settled = true;
       _fails = 0;
       _latency = 0;
       _startPing();
       _setState(LinkState.connected, '已连接');
+      onHostPicked?.call(info);
       return true;
     } catch (_) {
       _setState(LinkState.offline, '连不上 $ip:$port（确认同一 WiFi 且放行防火墙）');
       return false;
     }
+  }
+
+  void forgetHost() {
+    preferredId = null;
+    _emit();
   }
 
   void _startPing() {

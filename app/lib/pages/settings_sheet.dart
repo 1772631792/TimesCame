@@ -178,6 +178,35 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _ConnState(app: app),
+                            if (s.hostName.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  const Icon(Icons.bookmark_added_rounded,
+                                      size: 14, color: Palette.ok),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      '记住的电脑：${s.hostName}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          color: Palette.textDim, fontSize: 11.5),
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: () {
+                                      app.forgetHost();
+                                      setState(() {});
+                                    },
+                                    child: const Text(
+                                      '忘记',
+                                      style: TextStyle(color: Palette.err, fontSize: 11.5),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                             const SizedBox(height: 12),
                             TextField(
                               controller: _host,
@@ -244,7 +273,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       ),
                       const SizedBox(height: 18),
                       const Text(
-                        'TimesCam 1.0.0 · 局域网直传协议 v1\n照片只在你自己的 WiFi 内传输，不经过任何服务器。',
+                        'TimesCam 1.1.0 · 局域网直传协议 v1\n'
+                        '多台电脑时首页会列出头像，点一下就连那台\n'
+                        '照片只在你自己的 WiFi 内传输，不经过任何服务器。',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Palette.textDim, fontSize: 11, height: 1.7),
                       ),

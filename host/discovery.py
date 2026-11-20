@@ -41,6 +41,8 @@ def discovery_loop(state: HostState, stop: threading.Event) -> None:
         snap = state.snapshot()
         reply = {
             "name": host_name,
+            "id": snap["id"],
+            "hue": snap["hue"],
             "port": state.port,
             "dir": snap["dir"],
             "count": snap["count"],

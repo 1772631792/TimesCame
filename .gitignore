@@ -17,6 +17,11 @@ host/dist/
 # 脚本生成物
 tools/icon_preview.png
 
+# 发布物里的二进制不进仓库，只走 GitHub Release
+release/**/*.exe
+release/**/*.apk
+release/**/*.zip
+
 # 本机配置与临时文件
 .timescam_host.json
 host/_ui_test/

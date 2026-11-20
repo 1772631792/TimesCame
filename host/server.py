@@ -73,14 +73,20 @@ def make_handler(state: HostState, port: int):
         def do_GET(self):
             path = urllib.parse.urlparse(self.path).path
             if path == "/ping":
-                state.touch(self._client_ip())
+                ip = self._client_ip()
+                state.touch(ip)
+                state.note_device(ip)
                 self._json(200, {"ok": True, "name": socket.gethostname(), "t": time.time()})
             elif path == "/info":
-                state.touch(self._client_ip())
+                ip = self._client_ip()
+                state.touch(ip)
+                state.note_device(ip)
                 snap = state.snapshot()
                 self._json(200, {
                     "ok": True,
                     "name": socket.gethostname(),
+                    "id": snap["id"],
+                    "hue": snap["hue"],
                     "port": port,
                     "dir": snap["dir"],
                     "count": snap["count"],
@@ -152,6 +158,7 @@ def make_handler(state: HostState, port: int):
                 return
 
             speed = (length / 1024 / 1024) / (elapsed_ms / 1000.0) if elapsed_ms > 0 else 0.0
+            state.note_device(ip, device, length)
             state.note({
                 "path": str(target),
                 "name": target.name,
