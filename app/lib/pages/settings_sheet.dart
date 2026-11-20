@@ -273,7 +273,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       ),
                       const SizedBox(height: 18),
                       const Text(
-                        'TimesCam 1.1.0 · 局域网直传协议 v1\n'
+                        'TimesCam 2.0.0 · 局域网直传协议 v1\n'
                         '多台电脑时首页会列出头像，点一下就连那台\n'
                         '照片只在你自己的 WiFi 内传输，不经过任何服务器。',
                         textAlign: TextAlign.center,

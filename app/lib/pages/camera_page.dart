@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:isolate';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 
 import '../app_state.dart';
@@ -32,12 +35,15 @@ class CameraPage extends StatefulWidget {
 class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
   CameraController? _cam;
   List<CameraDescription> _cameras = const [];
-  int _camIndex = 0;
+  final int _camIndex = 0;
 
   bool _ready = false;
   bool _busy = false;
+  bool _booting = false;
   bool _grid = false;
-  bool _flash = false;
+  bool _torch = false;
+  /// 画面顺时针旋转的次数，每次 90°
+  int _rot = 0;
   bool _flashOn = false;
   String? _error;
 
@@ -50,7 +56,8 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _grid = app.settings.grid;
-    _flash = app.settings.flash;
+    _torch = app.settings.flash;
+    _rot = app.settings.rotate % 4;
     unawaited(_boot());
   }
 
@@ -91,11 +98,14 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
   }
 
   Future<void> _boot() async {
-    if (_busy) return;
-    setState(() {
-      _error = null;
-      _ready = false;
-    });
+    if (_booting || _busy) return;
+    _booting = true;
+    if (mounted) {
+      setState(() {
+        _error = null;
+        _ready = false;
+      });
+    }
     try {
       if (_cameras.isEmpty) {
         _cameras = await availableCameras();
@@ -112,9 +122,15 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
       await controller.initialize();
+
+      // 换镜头后要重新点灯；前摄通常没有补光灯
+      var torchOk = true;
       try {
-        await controller.setFlashMode(_flash ? FlashMode.auto : FlashMode.off);
-      } catch (_) {}
+        await controller.setFlashMode(_torch ? FlashMode.torch : FlashMode.off);
+      } catch (_) {
+        torchOk = false;
+      }
+
       if (!mounted) {
         await controller.dispose();
         return;
@@ -124,11 +140,35 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
         _cam = controller;
         _ready = true;
       });
+
+      if (!torchOk && _torch) {
+        _torch = false;
+        app.settings.flash = false;
+        unawaited(app.saveSettings());
+        if (mounted) {
+          setState(() {});
+          _toast('这颗镜头没有补光灯，已自动关灯');
+        }
+      }
     } on CameraException catch (e) {
-      setState(() => _error = _hint(e));
+      if (mounted) setState(() => _error = _hint(e));
     } catch (e) {
-      setState(() => _error = '相机启动失败：$e');
+      if (mounted) setState(() => _error = '相机启动失败：$e');
+    } finally {
+      _booting = false;
     }
+  }
+
+  void _toast(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(text),
+          duration: const Duration(milliseconds: 1800),
+        ),
+      );
   }
 
   String _hint(CameraException e) {
@@ -156,24 +196,37 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _switchCamera() async {
-    if (_cameras.length < 2 || _busy) return;
-    _camIndex = (_camIndex + 1) % _cameras.length;
-    _busy = true;
-    try {
-      await _boot();
-    } finally {
-      _busy = false;
-    }
+  /// 画面顺时针转 90°：预览和拍出来的照片一起转，转满一圈回到 0。
+  Future<void> _rotate90() async {
+    HapticFeedback.selectionClick();
+    setState(() => _rot = (_rot + 1) % 4);
+    app.settings.rotate = _rot;
+    unawaited(app.saveSettings());
+    _toast('画面已顺时针转 90°（共 ${_rot * 90}°）');
   }
 
-  Future<void> _toggleFlash() async {
-    _flash = !_flash;
-    app.settings.flash = _flash;
-    unawaited(app.saveSettings());
+  /// 开关手机补光灯（常亮手电筒）。
+  Future<void> _toggleTorch() async {
+    final next = !_torch;
+    final c = _cam;
     try {
-      await _cam?.setFlashMode(_flash ? FlashMode.auto : FlashMode.off);
-    } catch (_) {}
+      if (c != null && c.value.isInitialized) {
+        await c.setFlashMode(next ? FlashMode.torch : FlashMode.off);
+      }
+    } on CameraException catch (e) {
+      _toast(e.code.contains('NotSupported') || e.code.contains('Flash')
+          ? '这颗镜头没有补光灯（前摄一般没有）'
+          : '开灯失败：${e.description ?? e.code}');
+      return;
+    } catch (_) {
+      _toast('这颗镜头没有补光灯');
+      return;
+    }
+
+    _torch = next;
+    app.settings.flash = next;
+    unawaited(app.saveSettings());
+    HapticFeedback.selectionClick();
     if (mounted) setState(() {});
   }
 
@@ -184,7 +237,16 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
     HapticFeedback.mediumImpact();
     try {
       final file = await c.takePicture();
-      final bytes = await file.readAsBytes();
+      var bytes = await file.readAsBytes();
+      if (_rot != 0) {
+        bytes = await _rotateJpeg(bytes, _rot);
+        // 本地缓存文件也转过来，保留本地副本时和预览方向一致
+        try {
+          await File(file.path).writeAsBytes(bytes);
+        } catch (_) {
+          // 临时文件写不进就算了，上传用的仍是转好的数据
+        }
+      }
       final now = DateTime.now();
       unawaited(app.addShot(data: bytes, name: shotName(now), localPath: file.path));
       if (mounted) {
@@ -201,6 +263,16 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// 顺时针旋转 JPEG（turns 个 90°）。4K 图解码比较重，丢到后台 isolate，别卡住取景。
+  Future<Uint8List> _rotateJpeg(Uint8List bytes, int turns) {
+    return Isolate.run(() {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      final rotated = img.copyRotate(decoded, angle: turns * 90);
+      return Uint8List.fromList(img.encodeJpg(rotated, quality: 92));
+    });
   }
 
   Future<void> _pickFromAlbum() async {
@@ -228,8 +300,23 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
   Future<void> _tapFocus(TapDownDetails details, Size size) async {
     final c = _cam;
     if (c == null) return;
-    final dx = (details.localPosition.dx / size.width).clamp(0.0, 1.0);
-    final dy = (details.localPosition.dy / size.height).clamp(0.0, 1.0);
+    var dx = (details.localPosition.dx / size.width).clamp(0.0, 1.0);
+    var dy = (details.localPosition.dy / size.height).clamp(0.0, 1.0);
+    // 画面转过之后，点击位置要换算回传感器原始坐标，否则对焦点会跑偏
+    if (_rot != 0) {
+      final t = dx;
+      switch (_rot) {
+        case 1:
+          dx = dy;
+          dy = 1 - t;
+        case 2:
+          dx = 1 - t;
+          dy = 1 - dy;
+        case 3:
+          dx = 1 - dy;
+          dy = t;
+      }
+    }
     setState(() => _focusAt = details.localPosition);
     Timer(const Duration(milliseconds: 900), () {
       if (mounted) setState(() => _focusAt = null);
@@ -262,43 +349,55 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
           const _Vignette(),
           if (_grid) const _GridLines(),
 
-          // 顶部
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Row(
-                children: [
-                  GlassIconButton(icon: Icons.arrow_back_ios_new_rounded, onTap: widget.onBack, size: 42),
-                  const Spacer(),
-                  _UploadStatus(app: app),
-                  const Spacer(),
-                  if (_cameras.length > 1) ...[
-                    GlassIconButton(
-                      icon: Icons.cameraswitch_rounded,
-                      onTap: _switchCamera,
-                      size: 42,
+          // 顶部：Stack 是 expand，必须靠 Align 收到顶部，否则整行会被拉满高度、按钮跑到屏幕中间
+          Align(
+            alignment: Alignment.topCenter,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        GlassIconButton(
+                          icon: Icons.arrow_back_ios_new_rounded,
+                          onTap: widget.onBack,
+                          size: 54,
+                        ),
+                        const Spacer(),
+                        GlassIconButton(
+                          icon: Icons.rotate_90_degrees_cw_rounded,
+                          color: _rot == 0 ? Palette.text : Palette.accent,
+                          onTap: _rotate90,
+                          size: 54,
+                        ),
+                        const SizedBox(width: 10),
+                        GlassIconButton(
+                          icon: _torch ? Icons.flashlight_on_rounded : Icons.flashlight_off_rounded,
+                          color: _torch ? Palette.warn : Palette.text,
+                          onTap: _toggleTorch,
+                          size: 54,
+                        ),
+                        const SizedBox(width: 10),
+                        GlassIconButton(
+                          icon: _grid ? Icons.grid_on_rounded : Icons.grid_3x3_rounded,
+                          color: _grid ? Palette.accent : Palette.text,
+                          onTap: () {
+                            _grid = !_grid;
+                            app.settings.grid = _grid;
+                            unawaited(app.saveSettings());
+                            setState(() {});
+                          },
+                          size: 54,
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(height: 10),
+                    _UploadStatus(app: app),
                   ],
-                  GlassIconButton(
-                    icon: _flash ? Icons.flash_auto_rounded : Icons.flash_off_rounded,
-                    color: _flash ? Palette.warn : Palette.text,
-                    onTap: _toggleFlash,
-                    size: 42,
-                  ),
-                  const SizedBox(width: 8),
-                  GlassIconButton(
-                    icon: _grid ? Icons.grid_on_rounded : Icons.grid_3x3_rounded,
-                    color: _grid ? Palette.accent : Palette.text,
-                    onTap: () {
-                      _grid = !_grid;
-                      app.settings.grid = _grid;
-                      unawaited(app.saveSettings());
-                      setState(() {});
-                    },
-                    size: 42,
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -317,10 +416,13 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
               ),
             ),
 
-          AnimatedOpacity(
-            opacity: _flashOn ? 1 : 0,
-            duration: const Duration(milliseconds: 90),
-            child: const ColoredBox(color: Colors.white),
+          // 拍照白闪层：ColoredBox 本身是 opaque 命中测试，透明度为 0 时也会吃掉点击，必须 IgnorePointer
+          IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: _flashOn ? 1 : 0,
+              duration: const Duration(milliseconds: 90),
+              child: const ColoredBox(color: Colors.white),
+            ),
           ),
 
           if (_error != null) _ErrorBox(message: _error!, onRetry: _boot, onBack: widget.onBack),
@@ -358,15 +460,18 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
       );
     }
     final preview = c.value.previewSize;
-    if (preview == null) return CameraPreview(c);
-    return FittedBox(
-      fit: BoxFit.cover,
-      child: SizedBox(
-        width: preview.height,
-        height: preview.width,
-        child: CameraPreview(c),
-      ),
-    );
+    final view = preview == null
+        ? CameraPreview(c)
+        : FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: preview.height,
+              height: preview.width,
+              child: CameraPreview(c),
+            ),
+          );
+    if (_rot == 0) return view;
+    return RotatedBox(quarterTurns: _rot, child: view);
   }
 }
 
@@ -535,10 +640,11 @@ class _BottomBar extends StatelessWidget {
           ),
           _Shutter(busy: busy, enabled: ready, onTap: onShoot),
           GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: canOpenShots ? onOpenShots : null,
             child: Container(
-              width: 54,
-              height: 54,
+              width: 62,
+              height: 62,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: Colors.white.withValues(alpha: 0.22), width: 1.4),
@@ -569,10 +675,11 @@ class _SideButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Container(
-        width: 54,
-        height: 54,
+        width: 62,
+        height: 62,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(18),
           color: Colors.white.withValues(alpha: 0.1),

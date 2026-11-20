@@ -69,48 +69,56 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBody: true,
-      backgroundColor: Palette.bg,
-      body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: kBgGradient),
-        child: Stack(
-          children: [
-            const Positioned(top: -140, left: -90, child: _Glow(color: Palette.accent, size: 340)),
-            const Positioned(top: 90, right: -120, child: _Glow(color: Palette.accent2, size: 340)),
-            IndexedStack(
-              index: _tab,
-              children: [
-                HomePage(
-                  app: app,
-                  onOpenCamera: () => _go(1),
-                  onOpenSettings: () => showSettings(context, app),
-                ),
-                _cameraBuilt
-                    ? CameraPage(
-                        app: app,
-                        active: _tab == 1,
-                        onBack: () => _go(0),
-                        onOpenShots: () => _go(2),
-                      )
-                    : const SizedBox.shrink(),
-                ShotsPage(app: app, onOpenCamera: () => _go(1)),
-              ],
-            ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: _tab == 1
-          ? null
-          : AnimatedBuilder(
-              animation: app,
-              builder: (context, _) => _NavBar(
+    // 相机页 / 相册页时拦下系统返回手势，先回首页，而不是直接退出 App
+    return PopScope(
+      canPop: _tab == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _go(0);
+      },
+      child: Scaffold(
+        extendBody: true,
+        backgroundColor: Palette.bg,
+        body: DecoratedBox(
+          decoration: const BoxDecoration(gradient: kBgGradient),
+          child: Stack(
+            children: [
+              const Positioned(top: -140, left: -90, child: _Glow(color: Palette.accent, size: 340)),
+              const Positioned(top: 90, right: -120, child: _Glow(color: Palette.accent2, size: 340)),
+              IndexedStack(
                 index: _tab,
-                onTap: _go,
-                connected: app.net.state == LinkState.connected,
-                shopBadge: app.shots.length,
+                children: [
+                  HomePage(
+                    app: app,
+                    onOpenCamera: () => _go(1),
+                    onOpenSettings: () => showSettings(context, app),
+                  ),
+                  _cameraBuilt
+                      ? CameraPage(
+                          app: app,
+                          active: _tab == 1,
+                          onBack: () => _go(0),
+                          onOpenShots: () => _go(2),
+                        )
+                      : const SizedBox.shrink(),
+                  ShotsPage(app: app, onOpenCamera: () => _go(1)),
+                ],
               ),
-            ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: _tab == 1
+            ? null
+            : AnimatedBuilder(
+                animation: app,
+                builder: (context, _) => _NavBar(
+                  index: _tab,
+                  onTap: _go,
+                  connected: app.net.state == LinkState.connected,
+                  shopBadge: app.shots.length,
+                ),
+              ),
+      ),
     );
   }
 }

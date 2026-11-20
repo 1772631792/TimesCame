@@ -15,6 +15,8 @@ class Settings {
   String manualHost = '';
   bool grid = false;
   bool flash = false;
+  /// 画面顺时针旋转的 90° 次数（0~3）
+  int rotate = 0;
   String hostId = '';
   String hostName = '';
 
@@ -69,6 +71,7 @@ class AppState extends ChangeNotifier {
       ..manualHost = p.getString('manualHost') ?? ''
       ..grid = p.getBool('grid') ?? false
       ..flash = p.getBool('flash') ?? false
+      ..rotate = (p.getInt('rotate') ?? 0) % 4
       ..hostId = p.getString('hostId') ?? ''
       ..hostName = p.getString('hostName') ?? '';
     net.deviceName = settings.deviceName;
@@ -101,6 +104,7 @@ class AppState extends ChangeNotifier {
     await p.setString('manualHost', settings.manualHost);
     await p.setBool('grid', settings.grid);
     await p.setBool('flash', settings.flash);
+    await p.setInt('rotate', settings.rotate);
     await p.setString('hostId', settings.hostId);
     await p.setString('hostName', settings.hostName);
     net.deviceName = settings.deviceName;
