@@ -171,10 +171,12 @@ SHA256SUMS.txt               校验和
 git tag v1.1.0
 git push --tags
 
-# 再用 token 建 Release 并上传两个文件
-set GITHUB_TOKEN=ghp_xxx          # 需要 repo / Contents: Read and write
+# 建 Release 并上传两个文件（token 会先读 GITHUB_TOKEN，读不到就用本机 git 凭据）
 python tools/publish_release.py --dry-run     # 先看要发什么
 python tools/publish_release.py
+
+# 想指定别的 token 就
+set GITHUB_TOKEN=ghp_xxx          # 需要 repo / Contents: Read and write
 ```
 
 装了 `gh` 的话等价于：

@@ -42,6 +42,22 @@ def repo_from_git() -> str:
     return url[:-4] if url.endswith(".git") else url
 
 
+def token_from_git() -> str:
+    """环境变量没有 token 时，退而问本机的 git 凭据（GCM / store 都支持）。"""
+    try:
+        out = subprocess.run(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True, text=True, cwd=ROOT, timeout=20,
+        )
+        for line in out.stdout.splitlines():
+            if line.startswith("password="):
+                return line[9:].strip()
+    except Exception:
+        pass
+    return ""
+
+
 def version_from_pubspec() -> str:
     for line in (ROOT / "app" / "pubspec.yaml").read_text(encoding="utf-8").splitlines():
         if line.startswith("version:"):
@@ -57,7 +73,7 @@ def request(url: str, token: str, method: str = "GET", data: bytes | None = None
     req.add_header("Content-Type", content_type)
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
     req.add_header("User-Agent", "TimesCam-release-bot")
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=600) as resp:
         body = resp.read().decode("utf-8", "replace")
     return json.loads(body) if body.strip() else {}
 
@@ -73,7 +89,7 @@ def main() -> int:
 
     version = args.version or version_from_pubspec()
     repo = args.repo or repo_from_git()
-    token = args.token
+    token = args.token or token_from_git()
     tag = f"v{version}"
     bundle = ROOT / "release" / f"TimesCam-v{version}"
     notes_file = ROOT / "docs" / "release-notes" / f"v{version}.md"
@@ -101,7 +117,8 @@ def main() -> int:
         return 0
 
     if not token:
-        print("[x] 没有 GITHUB_TOKEN。生成一个有 repo 权限的 token 后：")
+        print("[x] 没找到 token：环境变量 GITHUB_TOKEN 为空，git 凭据里也没有。")
+        print("    生成一个有 repo 权限的 token 后：")
         print("    set GITHUB_TOKEN=ghp_xxx")
         return 1
 
