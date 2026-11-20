@@ -1,0 +1,23 @@
+# Flutter / Dart
+app/.dart_tool/
+app/build/
+app/dist/
+app/.flutter-plugins-dependencies
+app/android/.gradle/
+app/android/local.properties
+app/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+
+# Python
+__pycache__/
+*.pyc
+host/build/
+host/dist/
+*.spec
+
+# 脚本生成物
+tools/icon_preview.png
+
+# 本机配置与临时文件
+.timescam_host.json
+host/_ui_test/
+host/_exe_test/
