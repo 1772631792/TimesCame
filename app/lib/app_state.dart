@@ -10,7 +10,8 @@ import 'net_client.dart';
 class Settings {
   bool autoSync = true;
   bool keepLocal = false;
-  int resolution = 1;
+  /// 默认取传感器最大分辨率，接近原生相机直出的画质。
+  int resolution = 0;
   String deviceName = '我的手机';
   String manualHost = '';
   bool grid = false;
@@ -20,7 +21,7 @@ class Settings {
   String hostId = '';
   String hostName = '';
 
-  static const List<String> resolutionLabels = ['最高', '4K', '1080P', '720P'];
+  static const List<String> resolutionLabels = ['原生最高', '4K', '1080P', '720P'];
 }
 
 class AppState extends ChangeNotifier {
@@ -66,7 +67,7 @@ class AppState extends ChangeNotifier {
     settings = Settings()
       ..autoSync = p.getBool('autoSync') ?? true
       ..keepLocal = p.getBool('keepLocal') ?? false
-      ..resolution = p.getInt('resolution') ?? 1
+      ..resolution = p.getInt('resolution') ?? 0
       ..deviceName = p.getString('deviceName') ?? '我的手机'
       ..manualHost = p.getString('manualHost') ?? ''
       ..grid = p.getBool('grid') ?? false

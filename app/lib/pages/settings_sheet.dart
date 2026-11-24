@@ -166,7 +166,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                             ),
                             const SizedBox(height: 10),
                             const Text(
-                              '画质越高上传越慢；1 张 4K 照片约 2~4 MB，WiFi 下通常 0.3~0.8 秒。',
+                              '「原生最高」直接取相机传感器的最大分辨率，照片不二次压缩，效果最接近系统相机；'
+                              '画质越高上传越慢，1 张 4K 照片约 2~4 MB，WiFi 下通常 0.3~0.8 秒。',
                               style: TextStyle(color: Palette.textDim, fontSize: 11.5, height: 1.5),
                             ),
                           ],

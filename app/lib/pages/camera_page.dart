@@ -40,6 +40,8 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
   bool _ready = false;
   bool _busy = false;
   bool _booting = false;
+  /// 相机启动被打断时记一笔，等当前这轮结束/页面回来后自动重试。
+  bool _needsBoot = false;
   bool _grid = false;
   bool _torch = false;
   /// 画面顺时针旋转的次数，每次 90°
@@ -67,7 +69,8 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
     if (old.active == widget.active) return;
     final c = _cam;
     if (c == null || !c.value.isInitialized) {
-      if (widget.active && _error != null) unawaited(_boot());
+      // 黑屏转圈状态也要重试，不能只在报错时才恢复
+      if (widget.active) unawaited(_boot());
       return;
     }
     try {
@@ -83,23 +86,34 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final c = _cam;
-    if (c == null || !c.value.isInitialized) return;
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      unawaited(c.dispose().then((_) {
-        if (mounted) setState(() => _ready = false);
-      }));
+      final c = _cam;
       _cam = null;
-    } else if (state == AppLifecycleState.resumed) {
-      unawaited(_boot());
+      _needsBoot = true;
+      if (mounted) setState(() => _ready = false);
+      if (c != null) unawaited(c.dispose().catchError((_) {}));
+      return;
     }
+    if (state == AppLifecycleState.resumed) unawaited(_boot());
+  }
+
+  /// 当前这轮启动结束后，把攒下的重启请求接着跑完。
+  void _flushPendingBoot() {
+    if (!_needsBoot || !mounted) return;
+    _needsBoot = false;
+    unawaited(_boot());
   }
 
   Future<void> _boot() async {
-    if (_booting || _busy) return;
+    if (_booting || _busy) {
+      // 别把这次请求丢掉，拍照/启动结束后会自动补上
+      _needsBoot = true;
+      return;
+    }
     _booting = true;
+    _needsBoot = false;
     if (mounted) {
       setState(() {
         _error = null;
@@ -111,7 +125,8 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
         _cameras = await availableCameras();
       }
       if (_cameras.isEmpty) {
-        setState(() => _error = '这台设备上没有找到摄像头');
+        _error = '这台设备上没有找到摄像头';
+        if (mounted) setState(() {});
         return;
       }
       final desc = _cameras[_camIndex % _cameras.length];
@@ -121,7 +136,11 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
-      await controller.initialize();
+      // 相机被别的 App 占着时 initialize 可能永远不返回，加个超时兜底
+      await controller.initialize().timeout(
+            const Duration(seconds: 8),
+            onTimeout: () => throw CameraException('initTimeout', '相机启动超时'),
+          );
 
       // 换镜头后要重新点灯；前摄通常没有补光灯
       var torchOk = true;
@@ -131,11 +150,17 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
         torchOk = false;
       }
 
+      final old = _cam;
+      _cam = null;
+      if (old != null) {
+        try {
+          await old.dispose();
+        } catch (_) {}
+      }
       if (!mounted) {
-        await controller.dispose();
+        await controller.dispose().catchError((_) {});
         return;
       }
-      await _cam?.dispose();
       setState(() {
         _cam = controller;
         _ready = true;
@@ -151,11 +176,15 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
         }
       }
     } on CameraException catch (e) {
-      if (mounted) setState(() => _error = _hint(e));
+      // 即使页面已不可见也记下错误，回来时能看到提示而不是一直转圈
+      _error = _hint(e);
+      if (mounted) setState(() {});
     } catch (e) {
-      if (mounted) setState(() => _error = '相机启动失败：$e');
+      _error = '相机启动失败：$e';
+      if (mounted) setState(() {});
     } finally {
       _booting = false;
+      _flushPendingBoot();
     }
   }
 
@@ -261,26 +290,27 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
         );
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _busy = false;
+      if (mounted) setState(() {});
+      _flushPendingBoot();
     }
   }
 
   /// 顺时针旋转 JPEG（turns 个 90°）。4K 图解码比较重，丢到后台 isolate，别卡住取景。
+  /// 只有旋转时才重编码一次，quality 拉到 98 尽量贴近相机直出；不转时走原始字节，零损失。
   Future<Uint8List> _rotateJpeg(Uint8List bytes, int turns) {
     return Isolate.run(() {
       final decoded = img.decodeImage(bytes);
       if (decoded == null) return bytes;
       final rotated = img.copyRotate(decoded, angle: turns * 90);
-      return Uint8List.fromList(img.encodeJpg(rotated, quality: 92));
+      return Uint8List.fromList(img.encodeJpg(rotated, quality: 98));
     });
   }
 
   Future<void> _pickFromAlbum() async {
     try {
-      final picked = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 95,
-      );
+      // 不传 imageQuality，直接读相册原图字节，避免被二次压缩
+      final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
       if (picked == null) return;
       final Uint8List bytes = await picked.readAsBytes();
       await app.addShot(
@@ -322,8 +352,12 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
       if (mounted) setState(() => _focusAt = null);
     });
     try {
-      await c.setFocusPoint(Offset(dx, dy));
+      final point = Offset(dx, dy);
+      await c.setFocusPoint(point);
       await c.setFocusMode(FocusMode.auto);
+      // 原生相机是点哪测哪，测光点跟着对焦点走，避免主体忽明忽暗
+      await c.setExposurePoint(point);
+      await c.setExposureMode(ExposureMode.auto);
     } catch (_) {}
   }
 
@@ -343,7 +377,14 @@ class _CameraPageState extends State<CameraPage> with WidgetsBindingObserver {
         fit: StackFit.expand,
         children: [
           GestureDetector(
-            onTapDown: (d) => _tapFocus(d, size),
+            onTapDown: (d) {
+              final c = _cam;
+              if (c == null || !c.value.isInitialized) {
+                unawaited(_boot()); // 黑屏时点一下就能重连相机
+                return;
+              }
+              _tapFocus(d, size);
+            },
             child: _preview(),
           ),
           const _Vignette(),
